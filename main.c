@@ -1125,7 +1125,9 @@ void Encoder_define() {
 		EV_Buff[E_i] = Encoder_vel;
 		E_i = 0;
 	}
-
+	
+	
+	
 	EV_mva = 0.03333333
 			* (EV_Buff[0] + EV_Buff[1] + EV_Buff[2] + EV_Buff[3] + EV_Buff[4]
 					+ EV_Buff[5] + EV_Buff[6] + EV_Buff[7] + EV_Buff[8]
