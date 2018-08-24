@@ -15,6 +15,7 @@
 #pragma CODE_SECTION(Motor_Put_String,"ramfuncs")
 #pragma CODE_SECTION(Motor_Put_Char,"ramfuncs")
 #pragma CODE_SECTION(BT_transmit,"ramfuncs")
+#pragma CODE_SECTION(TrainAbnormalPerson,"ramfuncs")
 
 extern Uint16 RamfuncsLoadStart;
 extern Uint16 RamfuncsLoadEnd;
@@ -41,6 +42,7 @@ double E_vel_deg_new = 0;
 double E_vel_deg_old = 0;
 double EV_Buff[30];
 double EV_mva = 0;
+double EV_mva_old = 0;
 void Encoder_define();
 
 // @@@@@@@정준이의 변수선언@@@@@@@@
@@ -101,8 +103,13 @@ double b7 = -0.0008692;
 double a8 = 0.0005095;
 double b8 = 0.0002923;
 double w = 0.03604;
-double APM_assist = 0;
+double CPM_assist = 0;
 int pause_finish = 0;
+int init_bit = 0;
+double vel_gain = 0.0008;
+double acc_gain = 0.0001;
+double EA_mva = 0;
+double acc_term=0;
 // @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 
 //정준이의 함수------------------
@@ -120,6 +127,9 @@ void Type_Check_fun();
 void Reword_inflection_point();
 void Start_breaking();
 void Reg_setting_fun();
+//void Initialize_main_fun();
+void Encoder_position_renew();
+void Encoder_value_calculation();
 //------------------------
 
 // PWM Duty 변수 선언, 함수 선언
@@ -159,56 +169,53 @@ interrupt void sciaRxFifoIsr(void);
 char RxBuff[16];
 char Receivedbuff;
 
-
-
-
-// @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@Main 함수 시작
+// @@@@@@@@@@@@@@@@@@@@@@@Main 함수 @@@@@@@@@@@@@@@@@@@@@@@
 void main(void) {
-// Step 1. Disable Global Interrupt
+	// Step 1. Disable Global Interrupt
 	DINT;
 
-// Step 2. 시스템 컨트롤 초기화:
+	// Step 2. 시스템 컨트롤 초기화:
 	InitSysCtrl();
 
-// FLASH 영역의 함수를 빠른 속도를 위해 RAM으로 구동시키기 위해 선언한 함수
+	// FLASH 영역의 함수를 빠른 속도를 위해 RAM으로 구동시키기 위해 선언한 함수
 	MemCopy(&RamfuncsLoadStart, &RamfuncsLoadEnd, &RamfuncsRunStart);
 	InitFlash();
 
-// Step 3. 인터럽트 초기화:
+	// Step 3. 인터럽트 초기화:
 	InitPieCtrl();
 	IER = 0x0000;
 	IFR = 0x0000;
 	InitPieVectTable();
 
-// GPIO Pin을 밑의 기능을 사용하기 위해 재배치
+	// GPIO Pin을 밑의 기능을 사용하기 위해 재배치
 	InitSciaGpio();
 	InitScibGpio();
 	InitScicGpio();
 	InitAdc();
 	InitEPwm1Gpio();
 
-// Vector table을 내가 사용하기 위한 기능으로 배치
+	// Vector table을 내가 사용하기 위한 기능으로 배치
 	Reg_setting_fun();
 
-// PWM 초기화 함수
+	// PWM 초기화 함수
 	InitEPwm1Module();
 	InitEPwm2Module();
 
-// CPU Timer 초기화
+	// CPU Timer 초기화
 	InitCpuTimers();
 	Cpu_Clk = 150;          // 현재 시스템 클럭을 설정 (MHz 단위)
 	Timer_Prd = 5000;      // 타이머 주기 설정 (usec 단위) // 200 Hz -> 5000
 	ConfigCpuTimer(&CpuTimer0, Cpu_Clk, Timer_Prd);
 
-// CPU Timer0 시작
+	// CPU Timer0 시작
 	StartCpuTimer0();
 
-// CPU Timer0 인터럽트 활성화
+	// CPU Timer0 인터럽트 활성화
 	PieCtrlRegs.PIEIER1.bit.INTx7 = 1;         // PIE 인터럽트(TINT0) 활성화
 	PieCtrlRegs.PIEIER9.bit.INTx1 = 1;		  // SCIRXB
 	IER = IER | M_INT1 | M_INT9;              // CPU 인터럽트(INT1), SCIRXB  활성화
 
-// 통신함수 초기화
+	// 통신함수 초기화
 	scia_fifo_init();      // Initialize the SCI FIFO
 	scia_echoback_init();  // Initalize SCI for echoback
 	scib_fifo_init();      // Initialize the SCI FIFO
@@ -216,24 +223,25 @@ void main(void) {
 	scic_fifo_init();      // Initialize the SCI FIFO
 	scic_echoback_init();  // Initalize SCI for echoback
 
-// ADC 설정
-	AdcRegs.ADCTRL3.bit.ADCCLKPS = 3;    // ADCCLK = HSPCLK/(ADCCLKPS*2)/(CPS+1)
-	AdcRegs.ADCTRL1.bit.CPS = 1;         // ADCCLK = 75MHz/(3*2)/(1+1) = 6.25MHz
-	AdcRegs.ADCTRL1.bit.ACQ_PS = 3;     // 샘플/홀드 사이클 = ACQ_PS + 1 = 4 (ADCCLK기준)
-	AdcRegs.ADCTRL1.bit.SEQ_CASC = 1; // 시퀀스 모드 설정: 직렬 시퀀스 모드 (0:병렬 모드, 1:직렬 모드)
-	AdcRegs.ADCMAXCONV.bit.MAX_CONV1 = 8;  // ADC 채널수 설정: 1개(=MAX_CONV+1)채널을 ADC
+	// ADC 설정
+	/*
+	 AdcRegs.ADCTRL3.bit.ADCCLKPS = 3;    // ADCCLK = HSPCLK/(ADCCLKPS*2)/(CPS+1)
+	 AdcRegs.ADCTRL1.bit.CPS = 1;         // ADCCLK = 75MHz/(3*2)/(1+1) = 6.25MHz
+	 AdcRegs.ADCTRL1.bit.ACQ_PS = 3;     // 샘플/홀드 사이클 = ACQ_PS + 1 = 4 (ADCCLK기준)
+	 AdcRegs.ADCTRL1.bit.SEQ_CASC = 1; // 시퀀스 모드 설정: 직렬 시퀀스 모드 (0:병렬 모드, 1:직렬 모드)
+	 AdcRegs.ADCMAXCONV.bit.MAX_CONV1 = 8;  // ADC 채널수 설정: 1개(=MAX_CONV+1)채널을 ADC
 
-	AdcRegs.ADCCHSELSEQ1.bit.CONV00 = 0;      // ADC 순서 설정: 첫번째로 ADCINA2 채널을 ADC
-	AdcRegs.ADCCHSELSEQ1.bit.CONV01 = 1;
-	AdcRegs.ADCCHSELSEQ1.bit.CONV02 = 2;
-	AdcRegs.ADCCHSELSEQ1.bit.CONV03 = 3;
-	AdcRegs.ADCCHSELSEQ2.bit.CONV04 = 4;
-	AdcRegs.ADCCHSELSEQ2.bit.CONV05 = 5;
-	AdcRegs.ADCCHSELSEQ2.bit.CONV06 = 6;
-	AdcRegs.ADCCHSELSEQ2.bit.CONV07 = 7;
-	AdcRegs.ADCTRL2.bit.EPWM_SOCB_SEQ = 1;     // ePWM_SOCB로 ADC 시퀀스 시동
-	AdcRegs.ADCTRL2.bit.INT_ENA_SEQ1 = 1;      // ADC 시퀀스 완료시 인터럽트 발생 설정
-
+	 AdcRegs.ADCCHSELSEQ1.bit.CONV00 = 0;      // ADC 순서 설정: 첫번째로 ADCINA2 채널을 ADC
+	 AdcRegs.ADCCHSELSEQ1.bit.CONV01 = 1;
+	 AdcRegs.ADCCHSELSEQ1.bit.CONV02 = 2;
+	 AdcRegs.ADCCHSELSEQ1.bit.CONV03 = 3;
+	 AdcRegs.ADCCHSELSEQ2.bit.CONV04 = 4;
+	 AdcRegs.ADCCHSELSEQ2.bit.CONV05 = 5;
+	 AdcRegs.ADCCHSELSEQ2.bit.CONV06 = 6;
+	 AdcRegs.ADCCHSELSEQ2.bit.CONV07 = 7;
+	 AdcRegs.ADCTRL2.bit.EPWM_SOCB_SEQ = 1;     // ePWM_SOCB로 ADC 시퀀스 시동
+	 AdcRegs.ADCTRL2.bit.INT_ENA_SEQ1 = 1;      // ADC 시퀀스 완료시 인터럽트 발생 설정
+	 */
 	//ePWM_SOCB 이벤트 트리거 설정
 	EPwm3Regs.ETSEL.bit.SOCBEN = 1;            // SOCB 이벤트 트리거 Enable
 	EPwm3Regs.ETSEL.bit.SOCBSEL = 2;           // SCCB 트리거 조건 : 카운터 주기 일치 시
@@ -244,6 +252,7 @@ void main(void) {
 	EPwm3Regs.TBPRD = 1874; // TB주기= (TBPRD+1)/TBCLK = 1875/37.5MHz = 50us(20KHz)
 	EPwm3Regs.TBCTR = 0x0000;                  // TB 카운터 초기화
 
+	//버퍼 비우기
 	for (i = 0; i < 10; i++)
 		EV_Buff[i] = 0;
 
@@ -267,121 +276,133 @@ void main(void) {
 		}
 	}
 }
+
 // 메인함수 끝.
+/*
+ void Initialize_main_fun() {
 
+ }
+ */
 //정준함수-----------------------------------------------------------------------------------------
-void Reg_setting_fun(){
+void Reg_setting_fun() {
 	EALLOW;
-		PieVectTable.TINT0 = &cpu_timer0_isr;
-		PieVectTable.SCIRXINTA = &sciaRxFifoIsr;
-		SysCtrlRegs.HISPCP.bit.HSPCLK = 1;
+	PieVectTable.TINT0 = &cpu_timer0_isr;
+	PieVectTable.SCIRXINTA = &sciaRxFifoIsr;
+	SysCtrlRegs.HISPCP.bit.HSPCLK = 1;
 
-		GpioCtrlRegs.GPAMUX1.bit.GPIO15 = 0;
-		GpioCtrlRegs.GPAMUX2.bit.GPIO17 = 0;
-		GpioCtrlRegs.GPAMUX1.bit.GPIO5 = 0;
-		GpioCtrlRegs.GPBMUX2.bit.GPIO48 = 0;
-		GpioCtrlRegs.GPBMUX2.bit.GPIO51 = 0;
-		GpioCtrlRegs.GPBMUX2.bit.GPIO52 = 0;
-		GpioCtrlRegs.GPBMUX1.bit.GPIO37 = 0;
-		GpioCtrlRegs.GPAMUX2.bit.GPIO25 = 0;
-		GpioCtrlRegs.GPAMUX2.bit.GPIO27 = 0;
-		GpioCtrlRegs.GPAMUX1.bit.GPIO12 = 0;
-		GpioCtrlRegs.GPAMUX1.bit.GPIO14 = 0;
-		GpioCtrlRegs.GPBMUX1.bit.GPIO32 = 0;
-		GpioCtrlRegs.GPAMUX1.bit.GPIO7 = 0;
-		GpioCtrlRegs.GPAMUX1.bit.GPIO9 = 0;
-		GpioCtrlRegs.GPAMUX1.bit.GPIO11 = 0;
+	GpioCtrlRegs.GPAMUX1.bit.GPIO15 = 0;
+	GpioCtrlRegs.GPAMUX2.bit.GPIO17 = 0;
+	GpioCtrlRegs.GPAMUX1.bit.GPIO5 = 0;
+	GpioCtrlRegs.GPBMUX2.bit.GPIO48 = 0;
+	GpioCtrlRegs.GPBMUX2.bit.GPIO51 = 0;
+	GpioCtrlRegs.GPBMUX2.bit.GPIO52 = 0;
+	GpioCtrlRegs.GPBMUX1.bit.GPIO37 = 0;
+	GpioCtrlRegs.GPAMUX2.bit.GPIO25 = 0;
+	GpioCtrlRegs.GPAMUX2.bit.GPIO27 = 0;
+	GpioCtrlRegs.GPAMUX1.bit.GPIO12 = 0;
+	GpioCtrlRegs.GPAMUX1.bit.GPIO14 = 0;
+	GpioCtrlRegs.GPBMUX1.bit.GPIO32 = 0;
+	GpioCtrlRegs.GPAMUX1.bit.GPIO7 = 0;
+	GpioCtrlRegs.GPAMUX1.bit.GPIO9 = 0;
+	GpioCtrlRegs.GPAMUX1.bit.GPIO11 = 0;
 
-		GpioCtrlRegs.GPCMUX2.bit.GPIO86 = 0;
-		GpioCtrlRegs.GPCMUX2.bit.GPIO85 = 0;
-		GpioCtrlRegs.GPCMUX2.bit.GPIO84 = 0;
-		GpioCtrlRegs.GPCMUX2.bit.GPIO83 = 0;
-		GpioCtrlRegs.GPCMUX2.bit.GPIO82 = 0;
-		GpioCtrlRegs.GPCMUX2.bit.GPIO81 = 0;
-		GpioCtrlRegs.GPCMUX2.bit.GPIO80 = 0;
-		GpioCtrlRegs.GPBMUX1.bit.GPIO47 = 0;
-		GpioCtrlRegs.GPBMUX1.bit.GPIO46 = 0;
-		GpioCtrlRegs.GPBMUX1.bit.GPIO45 = 0;
-		GpioCtrlRegs.GPBMUX1.bit.GPIO44 = 0;
-		GpioCtrlRegs.GPBMUX1.bit.GPIO43 = 0;
-		GpioCtrlRegs.GPBMUX1.bit.GPIO42 = 0;
-		GpioCtrlRegs.GPBMUX1.bit.GPIO41 = 0;
-		GpioCtrlRegs.GPBMUX1.bit.GPIO40 = 0;
-		GpioCtrlRegs.GPBMUX1.bit.GPIO38 = 0;
+	GpioCtrlRegs.GPCMUX2.bit.GPIO86 = 0;
+	GpioCtrlRegs.GPCMUX2.bit.GPIO85 = 0;
+	GpioCtrlRegs.GPCMUX2.bit.GPIO84 = 0;
+	GpioCtrlRegs.GPCMUX2.bit.GPIO83 = 0;
+	GpioCtrlRegs.GPCMUX2.bit.GPIO82 = 0;
+	GpioCtrlRegs.GPCMUX2.bit.GPIO81 = 0;
+	GpioCtrlRegs.GPCMUX2.bit.GPIO80 = 0;
+	GpioCtrlRegs.GPBMUX1.bit.GPIO47 = 0;
+	GpioCtrlRegs.GPBMUX1.bit.GPIO46 = 0;
+	GpioCtrlRegs.GPBMUX1.bit.GPIO45 = 0;
+	GpioCtrlRegs.GPBMUX1.bit.GPIO44 = 0;
+	GpioCtrlRegs.GPBMUX1.bit.GPIO43 = 0;
+	GpioCtrlRegs.GPBMUX1.bit.GPIO42 = 0;
+	GpioCtrlRegs.GPBMUX1.bit.GPIO41 = 0;
+	GpioCtrlRegs.GPBMUX1.bit.GPIO40 = 0;
+	GpioCtrlRegs.GPBMUX1.bit.GPIO38 = 0;
 
-		GpioCtrlRegs.GPADIR.bit.GPIO15 = 0;
-		GpioCtrlRegs.GPADIR.bit.GPIO17 = 0;
-		GpioCtrlRegs.GPADIR.bit.GPIO5 = 0;
-		GpioCtrlRegs.GPBDIR.bit.GPIO48 = 1;
-		GpioCtrlRegs.GPBDIR.bit.GPIO51 = 1;
-		GpioCtrlRegs.GPBDIR.bit.GPIO52 = 1;
-		GpioCtrlRegs.GPBDIR.bit.GPIO37 = 0;
-		GpioCtrlRegs.GPADIR.bit.GPIO25 = 0;
-		GpioCtrlRegs.GPADIR.bit.GPIO27 = 0;
-		GpioCtrlRegs.GPADIR.bit.GPIO12 = 0;
-		GpioCtrlRegs.GPADIR.bit.GPIO14 = 0;
-		GpioCtrlRegs.GPBDIR.bit.GPIO32 = 0;
-		GpioCtrlRegs.GPADIR.bit.GPIO7 = 0;
-		GpioCtrlRegs.GPADIR.bit.GPIO9 = 0;
-		GpioCtrlRegs.GPADIR.bit.GPIO11 = 0;
+	GpioCtrlRegs.GPADIR.bit.GPIO15 = 0;
+	GpioCtrlRegs.GPADIR.bit.GPIO17 = 0;
+	GpioCtrlRegs.GPADIR.bit.GPIO5 = 0;
+	GpioCtrlRegs.GPBDIR.bit.GPIO48 = 1;
+	GpioCtrlRegs.GPBDIR.bit.GPIO51 = 1;
+	GpioCtrlRegs.GPBDIR.bit.GPIO52 = 1;
+	GpioCtrlRegs.GPBDIR.bit.GPIO37 = 0;
+	GpioCtrlRegs.GPADIR.bit.GPIO25 = 0;
+	GpioCtrlRegs.GPADIR.bit.GPIO27 = 0;
+	GpioCtrlRegs.GPADIR.bit.GPIO12 = 0;
+	GpioCtrlRegs.GPADIR.bit.GPIO14 = 0;
+	GpioCtrlRegs.GPBDIR.bit.GPIO32 = 0;
+	GpioCtrlRegs.GPADIR.bit.GPIO7 = 0;
+	GpioCtrlRegs.GPADIR.bit.GPIO9 = 0;
+	GpioCtrlRegs.GPADIR.bit.GPIO11 = 0;
 
-		GpioCtrlRegs.GPCDIR.bit.GPIO86 = 1;
-		GpioCtrlRegs.GPCDIR.bit.GPIO85 = 1;
-		GpioCtrlRegs.GPCDIR.bit.GPIO84 = 1;
-		GpioCtrlRegs.GPCDIR.bit.GPIO83 = 1;
-		GpioCtrlRegs.GPCDIR.bit.GPIO82 = 1;
-		GpioCtrlRegs.GPCDIR.bit.GPIO81 = 1;
-		GpioCtrlRegs.GPCDIR.bit.GPIO80 = 1;
-		GpioCtrlRegs.GPBDIR.bit.GPIO47 = 1;
-		GpioCtrlRegs.GPBDIR.bit.GPIO46 = 1;
-		GpioCtrlRegs.GPBDIR.bit.GPIO45 = 1;
-		GpioCtrlRegs.GPBDIR.bit.GPIO44 = 1;
-		GpioCtrlRegs.GPBDIR.bit.GPIO43 = 1;
-		GpioCtrlRegs.GPBDIR.bit.GPIO42 = 1;
-		GpioCtrlRegs.GPBDIR.bit.GPIO41 = 1;
-		GpioCtrlRegs.GPBDIR.bit.GPIO40 = 1;
-		GpioCtrlRegs.GPBDIR.bit.GPIO38 = 1;
+	GpioCtrlRegs.GPCDIR.bit.GPIO86 = 1;
+	GpioCtrlRegs.GPCDIR.bit.GPIO85 = 1;
+	GpioCtrlRegs.GPCDIR.bit.GPIO84 = 1;
+	GpioCtrlRegs.GPCDIR.bit.GPIO83 = 1;
+	GpioCtrlRegs.GPCDIR.bit.GPIO82 = 1;
+	GpioCtrlRegs.GPCDIR.bit.GPIO81 = 1;
+	GpioCtrlRegs.GPCDIR.bit.GPIO80 = 1;
+	GpioCtrlRegs.GPBDIR.bit.GPIO47 = 1;
+	GpioCtrlRegs.GPBDIR.bit.GPIO46 = 1;
+	GpioCtrlRegs.GPBDIR.bit.GPIO45 = 1;
+	GpioCtrlRegs.GPBDIR.bit.GPIO44 = 1;
+	GpioCtrlRegs.GPBDIR.bit.GPIO43 = 1;
+	GpioCtrlRegs.GPBDIR.bit.GPIO42 = 1;
+	GpioCtrlRegs.GPBDIR.bit.GPIO41 = 1;
+	GpioCtrlRegs.GPBDIR.bit.GPIO40 = 1;
+	GpioCtrlRegs.GPBDIR.bit.GPIO38 = 1;
 
 	// PWM 1B를 사용하기 위해 GPIO1을 Pull-up 시킴
-		GpioCtrlRegs.GPAPUD.bit.GPIO1 = 0;
-		GpioCtrlRegs.GPAPUD.bit.GPIO3 = 0;
+	GpioCtrlRegs.GPAPUD.bit.GPIO1 = 0;
+	GpioCtrlRegs.GPAPUD.bit.GPIO3 = 0;
 
 	// PWM 1B를 사용하기 위해 MUX Pin 배치
-		GpioCtrlRegs.GPAMUX1.bit.GPIO1 = 1;
-		GpioCtrlRegs.GPAMUX1.bit.GPIO3 = 1;
+	GpioCtrlRegs.GPAMUX1.bit.GPIO1 = 1;
+	GpioCtrlRegs.GPAMUX1.bit.GPIO3 = 1;
 
-		EDIS;
+	EDIS;
 }
 
 int Robot_Initialize() {
 	//환측다리=오른발이면
 	if (leg_num == 1) {
-		break_duty = 0.83;	//브레이크 OFF
-		Motor_Pwm = 0.55;	//모터 최저속도
+		if (!init_bit) {
+			break_duty = 0.63;	//브레이크 OFF
+			Motor_Pwm = 0.55;	//모터 최저속도
 
-		if (Encoder_deg_new >= 345 && Encoder_deg_new <= 350) {
-			break_duty = 0;
-			Motor_Pwm = 0;
-			if (pause_finish == 0)
-				pause_finish = 1;
-
+			if (Encoder_deg_new >= 345 && Encoder_deg_new <= 350) {
+				break_duty = 0;
+				Motor_Pwm = 0;
+				init_bit = 1;
+				if (pause_finish == 0 && pause_bit)
+					pause_finish = 1;
+				return 1;
+			}
+			return 0;
+		} else
 			return 1;
-		}
 	}
 	//왼발이면
 	else if (leg_num == 2) {
-		break_duty = 0.83;
-		Motor_Pwm = 0.55;
-		if (Encoder_deg_new >= 165 && Encoder_deg_new <= 170) {
-			break_duty = 0;
-			Motor_Pwm = 0;
-			if (pause_finish == 0)
-				pause_finish = 1;
-
+		if (!init_bit) {
+			break_duty = 0.63;
+			Motor_Pwm = 0.55;
+			if (Encoder_deg_new >= 165 && Encoder_deg_new <= 170) {
+				break_duty = 0;
+				Motor_Pwm = 0;
+				init_bit = 1;
+				if (pause_finish == 0 && pause_bit)
+					pause_finish = 1;
+				return 1;
+			}
+			return 0;
+		} else
 			return 1;
-		}
 	}
-	OutputPWM();
 	return 0;
 }
 
@@ -425,7 +446,7 @@ void clear_variable() {
 	RxBuff[10] = 0;
 	RxBuff[11] = 0;
 	smooth_rise = 0;
-	APM_assist = 0;
+	CPM_assist = 0;
 
 	for (i = 0; i < 30; i++) {
 		EV_Buff[i] = 0;
@@ -653,34 +674,7 @@ void BT_transmit() {
 
 void Uart_transmit() {
 	//@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@테스트시 넣는 코드@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@//
-	//sprintf(UT1,"%d,%d,%d,%d\n\0",(int)(COP_R_mva*10),(int)(Torque_R*10),(int)(COP_L_mva*10),(int)(Torque_L*10));
-	// MATLAB Graph
-	//sprintf(UT1,"%d,%d,%d,%d\n\0",(int)(COP_R_mva*10),(int)(Torque_R*10),(int)(COP_L_mva*10),(int)(Torque_L*10));
-	sprintf(UT1, "%d,%ld,%ld\n\0", (int) (Motor_Pwm * 10000),
-			(long) (Encoder_deg_new * 100), (long) (EV_mva * 10000));
-	//sprintf(UT1,"%ld,%d,%d,%d,%d\n\0",(long)(EV_mva*10000),(int)(Total_torque*100),(int)(E_vel_deg_new*10),(int)(Torque_L*100),(int)(Torque_R*100));
-	// UART_Put_String(UT1);
-	//sprintf(UT1,"!s%d.%dt%d%d%dd%d.%d%d?\n\0",(int)velocity,(int)under_velocity,time_now_hour,time_now_min_10,time_now_min_1,  move_distance_1, move_distance_2,move_distance_3);
-
-	//  sprintf(UT1,"!s%d.%dt%d%d%dd%d.%d%d?\n\0",(int)velocity,(int)under_velocity,time_now_hour,time_now_min_10,time_now_min_1,  move_distance_1, move_distance_2,move_distance_3);
-	//  UART_Put_String(UT1);
-	// sprintf(UT1,"deg:%3d distance:%d m cnt:%d\n\0",(int)(Encoder_deg_new),(int)(move_dis*0.001),(int)Encoder_revcnt);
-	//  UART_Put_String(UT1);
-//	 sprintf(UT1,"%d,%d,%d\n\0",(int)(E_vel_deg_new*10),(int)(Encoder_deg_new*10),(int)(Encoder_vel*10));
-//	 UART_Put_String(UT1);
-	// Bluetooth Comm
-
-	/*sprintf(UT1,"!A%4dC%3dF%3d?",(int)(Encoder_deg_new*10),(int)(COP_R_mva),(int)(Force_R_mva*9.8));
-	 UART_Put_String(UT1);
-	 for(c=0; c < 50 ; c++)
-	 {
-	 UT1[c]=0;
-	 }*/
-
-	// Realtime Matlab Dislpaly
-	//   sprintf(UT1,"%3.0f%3.0f%3.0f%3.0f!",COP_ab,COP_cd,Force_L,Force_R);
-	//sprintf(UT1,"%ld,%d,%d,%d,%d\n\0",(long)(EV_mva*10000),(int)(Total_torque*100),(int)(E_vel_deg_new*10),(int)(Torque_L*100),(int)(Torque_R*100));
-	//@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@//
+	sprintf(UT1, "%ld,%ld,%ld\n\0", (long) (Motor_Pwm * 10000),	(long) (Encoder_deg_new * 100), (long) (EV_mva * 10000));
 //@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@재활치료시 넣는 코드@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@//
 	/*	sprintf(UT1,"!s%d.%dt%d%d%dd%d.%d%d?\n\0",(int)velocity,(int)under_velocity,time_now_hour,time_now_min_10,time_now_min_1,  move_distance_1, move_distance_2,move_distance_3);
 
@@ -727,11 +721,7 @@ void Motor_transmit() {
 	}
 }
 
-void Encoder_define() {
-	Encoder_deg_old = Encoder_deg_new; // 이전 Encoder값을 저장
-	E_vel_deg_old = E_vel_deg_new;
-
-	// Encoder Digital Input 값 받기
+void Encoder_position_renew() {
 	Encoder[0] = GpioDataRegs.GPADAT.bit.GPIO5;
 	Encoder[1] = GpioDataRegs.GPBDAT.bit.GPIO37;
 	Encoder[2] = GpioDataRegs.GPADAT.bit.GPIO25;
@@ -742,7 +732,8 @@ void Encoder_define() {
 	Encoder[7] = GpioDataRegs.GPADAT.bit.GPIO7;
 	Encoder[8] = GpioDataRegs.GPADAT.bit.GPIO9;
 	Encoder[9] = GpioDataRegs.GPADAT.bit.GPIO11;
-
+}
+void Encoder_value_calculation() {
 	Encoder_sum = 0;
 
 	for (Encoder_cnt = 0; Encoder_cnt < 10; Encoder_cnt++) {
@@ -758,6 +749,9 @@ void Encoder_define() {
 	move_dis = 0.000001 * E_vel_deg_new * 880 / 360; //총 회전각도*각거리?
 	Encoder_vel = (E_vel_deg_new - E_vel_deg_old) * 100; // Angular velocity dt=0.005s
 
+}
+
+void Moving_avg_degree() {
 	if (E_i == 0) {
 		EV_Buff[E_i] = Encoder_vel;
 		E_i++;
@@ -850,8 +844,6 @@ void Encoder_define() {
 		E_i = 0;
 	}
 
-
-
 	EV_mva = 0.03333333
 			* (EV_Buff[0] + EV_Buff[1] + EV_Buff[2] + EV_Buff[3] + EV_Buff[4]
 					+ EV_Buff[5] + EV_Buff[6] + EV_Buff[7] + EV_Buff[8]
@@ -861,6 +853,19 @@ void Encoder_define() {
 					+ EV_Buff[21] + EV_Buff[22] + EV_Buff[23] + EV_Buff[24]
 					+ EV_Buff[25] + EV_Buff[26] + EV_Buff[27] + EV_Buff[28]
 					+ EV_Buff[29]);
+	EA_mva = (EV_mva - EV_mva_old) * 100;
+
+}
+
+void Encoder_define() {
+	Encoder_deg_old = Encoder_deg_new; // 이전 Encoder값을 저장
+	E_vel_deg_old = E_vel_deg_new;
+	EV_mva_old = EV_mva;
+
+	// Encoder Digital Input 값 받기
+	Encoder_position_renew();
+	Encoder_value_calculation();
+	Moving_avg_degree();
 
 }
 
@@ -929,6 +934,7 @@ interrupt void sciaRxFifoIsr(void) {
 	} else if (RxBuff[0] == '!' && RxBuff[1] == 'P' && RxBuff[2] == '2'
 			&& RxBuff[3] == '?') {
 		pause_bit = 0;
+		pause_finish = 0;
 		RxBuff[6] = 0;
 		pause_finish = 0;
 	} else if (RxBuff[0] == '!' && RxBuff[1] == 'M' && RxBuff[2] == '1'
@@ -1009,20 +1015,25 @@ void MetabolizeRehabilitationRobot() {
 	if (!Mt_cnt)
 		++MotorCount;
 
-	if (TimerCount_2 == 2) //속도, 토크값 컴에서확인
-			{
+	//속도, 토크값 컴에서확인
+	if (TimerCount_2 == 2) {
 		TimerCount_2 = 0;
 		Encoder_define();
-		if (start_bit && !end_bit)
+		if (start_bit && !end_bit) {
 			Uart_transmit();
+			BT_transmit(); //테스트시 넣음
+		}
 	}
-
-	if (TimerCount == 20) // MATLAB 2 -> 100Hz Bluetooth 40 -> 5Hz
-			{
-		TimerCount = 0;  // PC로 데이터 전송하기 위한 함수
-		if (start_bit && (!end_bit))
-			BT_transmit();
-	}
+	/*
+	 // MATLAB 2 -> 100Hz Bluetooth 40 -> 5Hz
+	 if (TimerCount == 20) {
+	 // PC로 데이터 전송하기 위한 함수
+	 TimerCount = 0;
+	 if (start_bit && (!end_bit)) {
+	 //BT_transmit();
+	 }
+	 }
+	 */
 }
 
 int ConnectBluetooth() {
@@ -1035,8 +1046,6 @@ int ConnectBluetooth() {
 void OutputPWM() {
 	if (start_bit && Encoder_vel < -10)
 		break_duty = 0;
-	else if (start_bit && Encoder_vel > -10)
-		break_duty = 0.83;
 
 	if (Motor_Pwm >= 1)
 		Motor_Pwm = 1;
@@ -1048,11 +1057,11 @@ void OutputPWM() {
 	else if (break_duty <= 0)
 		break_duty = 0;
 
-	// Brake의 Duty를 조절하는 함수. Brake Duty는 0.0 ~ 1.0 사이어야 함.
+// Brake의 Duty를 조절하는 함수. Brake Duty는 0.0 ~ 1.0 사이어야 함.
 	EPwm1Regs.TBPRD = (150E6 / 20E3) - 1;
 	EPwm1Regs.CMPB = EPwm1Regs.TBPRD * break_duty;
 
-	// Motor의 Duty를 조절하는 함수. Motor Duty는 0.0 ~ 1.0 사이어야 함.
+// Motor의 Duty를 조절하는 함수. Motor Duty는 0.0 ~ 1.0 사이어야 함.
 	EPwm2Regs.TBPRD = (150E6 / 20E3) - 1;
 	EPwm2Regs.CMPB = EPwm2Regs.TBPRD * Motor_Pwm;
 
@@ -1064,42 +1073,33 @@ int IsStart() {
 }
 
 int IsPause() {
-
 	if (pause_bit) {
-		if (!pause_finish)
+		if (!pause_finish) {
+			if (init_bit == 1)
+				init_bit = 0;
 			Robot_Initialize();
-
-		return 1;
-	} else
-		pause_finish = 0;
-
+			return 1;
+		} else
+			return 1;
+	}
 	return 0;
 }
 
 void IncreaseTime() {
 	++training_timer;
-	if (training_timer == 200)   // 훈련시간 확인 알려주는것
-			{
+	// 훈련시간 확인 알려주는것
+	if (training_timer == 200) {
 		training_timer = 0;
 		++time_now;
 	}
 }
 
 void TrainAbnormalPerson() {
+	break_duty = 0.83;
 	switch (mode_num) {
 	case 1:
 		Start_breaking();
-		Motor_Pwm = 0.52 + target_gain * 0.048;
-		Type_Check_fun();
-	case 2:
-		Start_breaking();
-		Reword_inflection_point();
-		Motor_Pwm = EV_mva * 40 * smooth_rise;
-		Type_Check_fun();
-	case 3:
-		Start_breaking();
-		//Reword_inflection_point();
-		APM_assist = a0 + a1 * cos(Encoder_deg_new * w)
+		CPM_assist = a0 + a1 * cos(Encoder_deg_new * w)
 				+ b1 * sin(Encoder_deg_new * w)
 				+ a2 * cos(2 * Encoder_deg_new * w)
 				+ b2 * sin(2 * Encoder_deg_new * w)
@@ -1115,20 +1115,69 @@ void TrainAbnormalPerson() {
 				+ b7 * sin(7 * Encoder_deg_new * w)
 				+ a8 * cos(8 * Encoder_deg_new * w)
 				+ b8 * sin(8 * Encoder_deg_new * w);
-		Motor_Pwm = APM_assist;
+		Motor_Pwm = (1 + target_gain) * (CPM_assist - 0.5985) + 0.5985;
 		Type_Check_fun();
+		break;
+	case 2:
+		Start_breaking();
+		Reword_inflection_point();
+		Motor_Pwm = EV_mva * 40 * smooth_rise;
+		Type_Check_fun();
+		break;
+	case 3:
+		Start_breaking();
+		CPM_assist = a0 + a1 * cos(Encoder_deg_new * w)
+				+ b1 * sin(Encoder_deg_new * w)
+				+ a2 * cos(2 * Encoder_deg_new * w)
+				+ b2 * sin(2 * Encoder_deg_new * w)
+				+ a3 * cos(3 * Encoder_deg_new * w)
+				+ b3 * sin(3 * Encoder_deg_new * w)
+				+ a4 * cos(4 * Encoder_deg_new * w)
+				+ b4 * sin(4 * Encoder_deg_new * w)
+				+ a5 * cos(5 * Encoder_deg_new * w)
+				+ b5 * sin(5 * Encoder_deg_new * w)
+				+ a6 * cos(6 * Encoder_deg_new * w)
+				+ b6 * sin(6 * Encoder_deg_new * w)
+				+ a7 * cos(7 * Encoder_deg_new * w)
+				+ b7 * sin(7 * Encoder_deg_new * w)
+				+ a8 * cos(8 * Encoder_deg_new * w)
+				+ b8 * sin(8 * Encoder_deg_new * w);
+
+		acc_term = b1 * w * cos(w * Encoder_deg_new)
+				+ 2 * b2 * w * cos(2 * w * Encoder_deg_new)
+				+ 3 * b3 * w * cos(3 * w * Encoder_deg_new)
+				+ 4 * b4 * w * cos(4 * w * Encoder_deg_new)
+				+ 5 * b5 * w * cos(5 * w * Encoder_deg_new)
+				+ 6 * b6 * w * cos(6 * w * Encoder_deg_new)
+				+ 7 * b7 * w * cos(7 * w * Encoder_deg_new)
+				+ 8 * b8 * w * cos(8 * w * Encoder_deg_new)
+				- a1 * w * sin(w * Encoder_deg_new)
+				- 2 * a2 * w * sin(2 * w * Encoder_deg_new)
+				- 3 * a3 * w * sin(3 * w * Encoder_deg_new)
+				- 4 * a4 * w * sin(4 * w * Encoder_deg_new)
+				- 5 * a5 * w * sin(5 * w * Encoder_deg_new)
+				- 6 * a6 * w * sin(6 * w * Encoder_deg_new)
+				- 7 * a7 * w * sin(7 * w * Encoder_deg_new)
+				- 8 * a8 * w * sin(8 * w * Encoder_deg_new);
+
+		//0.0008 0.0001
+		//Motor_Pwm = (1 + target_gain) * (CPM_assist - 0.5985) + 0.5985+ vel_gain * (EV_mva - 1600 * (CPM_assist - 0.5985))	+ acc_gain * (EA_mva - 10000*acc_term);
+		Motor_Pwm = (1+vel_gain * (EV_mva - 1600 * (CPM_assist - 0.5985))	+ acc_gain * (EA_mva - 10000*acc_term))*(1 + target_gain) * (CPM_assist - 0.5985) + 0.5985 ;
+		Type_Check_fun();
+		break;
 	}
+
 }
 
 void UpdateInformation() {
-	//시간변수 업데이트
+//시간변수 업데이트
 	time_now_min = time_now / 60;
 	time_now_min = time_now_min % 60;
 	time_now_min_10 = time_now_min / 10;
 	time_now_min_1 = time_now_min - time_now_min_10 * 10;
 	time_now_hour = time_now / 3600;
 	time_now_hour = time_now_hour % 60;
-	//거리변수 업데이트
+//거리변수 업데이트
 	move_distance_4 = move_dis * 1000;
 	move_distance_4 = move_distance_4 % 1;
 	move_distance_3 = move_dis * 1000 / 10;
@@ -1137,7 +1186,7 @@ void UpdateInformation() {
 	move_distance_2 = move_distance_2 % 100;
 	move_distance_1 = move_dis;
 	move_distance_1 = move_distance_1 % 1000;
-	//각속도-->보행속도
+//각속도-->보행속도
 	velocity = EV_mva * 0.0088;
 	under_velocity = velocity * 100 - ((int) velocity) * 100;
 }
@@ -1147,8 +1196,11 @@ int IsEnd() {
 }
 
 void BeNormal() {
+	if (init_bit)
+		init_bit = 0;
 	Robot_Initialize();
-	clear_variable();
+	if (init_bit)
+		clear_variable();
 }
 
 void Type_Check_fun() {
@@ -1170,19 +1222,19 @@ void Type_Check_fun() {
 }
 
 void Reword_inflection_point() {
-	if (Encoder_deg_new >= 0 && Encoder_deg_new < 10) {
+	if (Encoder_deg_new >= 0 && Encoder_deg_new < 10)
 		smooth_rise = 0;
-	} else if (Encoder_deg_new >= 21 && Encoder_deg_new < 90) {
+	else if (Encoder_deg_new >= 21 && Encoder_deg_new < 90)
 		smooth_rise = 1;
-	} else if (Encoder_deg_new >= 100 && Encoder_deg_new < 190) {
+	else if (Encoder_deg_new >= 100 && Encoder_deg_new < 190)
 		smooth_rise = 0;
-	} else if (Encoder_deg_new >= 201 && Encoder_deg_new < 270) {
+	else if (Encoder_deg_new >= 201 && Encoder_deg_new < 270)
 		smooth_rise = 1;
-	} else if (Encoder_deg_new >= 280 && Encoder_deg_new <= 360) {
+	else if (Encoder_deg_new >= 280 && Encoder_deg_new <= 360)
 		smooth_rise = 0;
-	} else {
+	else
 		smooth_rise = 0.5 * (1 - cos(16 * Encoder_deg_new - 160));
-	}
+
 }
 void Start_breaking() {
 	if ((break_timer < 400) && (start_bit == 1))   //2초동안 1차함수그래프로 브레이크 듀티 상승
@@ -1216,9 +1268,8 @@ interrupt void cpu_timer0_isr(void) // cpu timer 현재 제어주파수 100Hz
 
 	if (IsEnd())
 		BeNormal();
-
-	RETURN: UpdateInformation();
-	OutputPWM();
+	UpdateInformation();
+	RETURN: OutputPWM();
 }
 
 //============================================================================================
