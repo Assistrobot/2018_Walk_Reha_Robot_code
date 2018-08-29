@@ -125,6 +125,7 @@ double sum_no_gait_speed=0;
 double sum_abno_gait_speed=0;
 double mean_abno_gait_speed=0;
 double mean_no_gait_speed=0;
+double gait_score=0;
 
 // @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 
@@ -680,7 +681,7 @@ void Motor_Put_String(char *Motor_string) {
 void BT_transmit() {
 
 	sprintf(BT1, "!s%d.%dt%d%d%dd%d.%d%d?\n\0", (int) velocity,
-			(int) under_velocity, time_now_hour, time_now_min_10,
+			(int) gait_score, time_now_hour, time_now_min_10,
 			time_now_min_1, move_distance_1, move_distance_2, move_distance_3);
 	//시간설정
 	if (Type_sel == 2) {
@@ -1293,20 +1294,21 @@ void Gait_score_calculation() {
 		if ((Gait_score_degree - ex_gait_degree) < -170) {
 			foot_shift_bit = ~foot_shift_bit;
 			gait_bit=0;
+
 			//주기끝나면 버퍼 비우기, 계산
 			if (foot_shift_bit)
 				check_gait_score();
 		}
 		//환측 stance 상황
 		if (foot_shift_bit){
-			gait_normal_socre[gait_bit]=EV_mva;
+			gait_normal_socre[gait_bit]=EV_mva * 0.0088;
 			++gait_bit;
 			normal_gait_size=gait_bit;
 		}
 
 		//건측 stance 상황
 		if(!foot_shift_bit){
-			gait_abnormal_socre[gait_bit]=EV_mva;
+			gait_abnormal_socre[gait_bit]=EV_mva* 0.0088;
 			++gait_bit;
 			abnormal_gait_size=gait_bit;
 		}
@@ -1320,16 +1322,25 @@ void check_gait_score(){
 	for(i=0; i<normal_gait_size; i++)
 		sum_no_gait_speed+=gait_normal_socre[i];
 	mean_no_gait_speed=sum_no_gait_speed/normal_gait_size;
+	mean_no_gait_speed=roundf(mean_no_gait_speed*100)/100;
 
 	for(i=0; i<abnormal_gait_size; i++)
 		sum_abno_gait_speed+=gait_abnormal_socre[i];
 	mean_abno_gait_speed=sum_abno_gait_speed/abnormal_gait_size;
+	mean_abno_gait_speed=roundf(mean_abno_gait_speed*100)/100;
 
 
+	gait_score=(100-abs(mean_abno_gait_speed - mean_no_gait_speed));
+	if(gait_score<0)
+		gait_score=0;
+
+	//버퍼비우기
 	for (i = 0; i < 800; i++){
 		gait_abnormal_socre[i] = 0;
 		gait_normal_socre[i] = 0;
 	}
+	abnormal_gait_size=0;
+	normal_gait_size=0;
 
 
 }
