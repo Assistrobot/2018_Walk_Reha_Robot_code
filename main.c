@@ -16,6 +16,7 @@
 #pragma CODE_SECTION(Motor_Put_Char,"ramfuncs")
 #pragma CODE_SECTION(BT_transmit,"ramfuncs")
 #pragma CODE_SECTION(TrainAbnormalPerson,"ramfuncs")
+#pragma CODE_SECTION(check_gait_score,"ramfuncs")
 
 extern Uint16 RamfuncsLoadStart;
 extern Uint16 RamfuncsLoadEnd;
@@ -106,12 +107,25 @@ double w = 0.03604;
 double CPM_assist = 0;
 int pause_finish = 0;
 int init_bit = 0;
-double vel_gain = 0.05;//0.008
-double acc_gain = 0.0001;//0.002
+double vel_gain = 0.05; //0.008
+double acc_gain = 0.0001; //0.002
 double EA_mva = 0;
-double acc_term=0;
-double vel_acc_gain=0;
-double Gait_score_degree=0;
+double acc_term = 0;
+double vel_acc_gain = 0;
+double Gait_score_degree = 0;
+unsigned int start_record_bit = 0;
+double ex_gait_degree = 180;
+double gait_normal_socre[800];
+double gait_abnormal_socre[800];
+unsigned int gait_bit=0;
+int foot_shift_bit=0;
+double normal_gait_size=0;
+double abnormal_gait_size=0;
+double sum_no_gait_speed=0;
+double sum_abno_gait_speed=0;
+double mean_abno_gait_speed=0;
+double mean_no_gait_speed=0;
+
 // @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 
 //정준이의 함수------------------
@@ -133,6 +147,7 @@ void Reg_setting_fun();
 void Encoder_position_renew();
 void Encoder_value_calculation();
 void Gait_score_calculation();
+void check_gait_score();
 //------------------------
 
 // PWM Duty 변수 선언, 함수 선언
@@ -264,6 +279,12 @@ void main(void) {
 
 	for (i = 0; i < 16; i++)
 		RxBuff[i] = 0;
+
+	for (i = 0; i < 800; i++){
+		gait_abnormal_socre[i] = 0;
+		gait_normal_socre[i] = 0;
+	}
+
 
 	EINT;
 	// Enable Global interrupt INTM
@@ -677,7 +698,8 @@ void BT_transmit() {
 
 void Uart_transmit() {
 	//@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@테스트시 넣는 코드@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@//
-	sprintf(UT1, "%ld,%ld,%ld\n\0", (long) (Motor_Pwm * 10000),	(long) (Encoder_deg_new * 100), (long) (EV_mva * 10000));
+	sprintf(UT1, "%ld,%ld,%ld\n\0", (long) (Motor_Pwm * 10000),
+			(long) (Encoder_deg_new * 100), (long) (EV_mva * 10000));
 //@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@재활치료시 넣는 코드@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@//
 	/*	sprintf(UT1,"!s%d.%dt%d%d%dd%d.%d%d?\n\0",(int)velocity,(int)under_velocity,time_now_hour,time_now_min_10,time_now_min_1,  move_distance_1, move_distance_2,move_distance_3);
 
@@ -958,10 +980,12 @@ interrupt void sciaRxFifoIsr(void) {
 	else if (RxBuff[0] == '!' && RxBuff[1] == 'H' && RxBuff[2] == 'R'
 			&& RxBuff[3] == '?') {
 		leg_num = 1;
+		ex_gait_degree = 180;
 		RxBuff[6] = 0;
 	} else if (RxBuff[0] == '!' && RxBuff[1] == 'H' && RxBuff[2] == 'L'
 			&& RxBuff[3] == '?') {
 		leg_num = 2;
+		ex_gait_degree = 0;
 		RxBuff[6] = 0;
 	}
 
@@ -1024,19 +1048,16 @@ void MetabolizeRehabilitationRobot() {
 		Encoder_define();
 		if (start_bit && !end_bit) {
 			Uart_transmit();
-			BT_transmit(); //테스트시 넣음
+			//BT_transmit(); //테스트시 넣음
 		}
 	}
-	/*
 	 // MATLAB 2 -> 100Hz Bluetooth 40 -> 5Hz
 	 if (TimerCount == 20) {
-	 // PC로 데이터 전송하기 위한 함수
 	 TimerCount = 0;
-	 if (start_bit && (!end_bit)) {
-	 //BT_transmit();
+	 if (start_bit && (!end_bit))
+		 BT_transmit();
 	 }
-	 }
-	 */
+
 }
 
 int ConnectBluetooth() {
@@ -1165,10 +1186,12 @@ void TrainAbnormalPerson() {
 
 		//0.0008 0.0001
 		//Motor_Pwm = (1 + target_gain) * (CPM_assist - 0.5985) + 0.5985+ vel_gain * (EV_mva - 1600 * (CPM_assist - 0.5985))	+ acc_gain * (EA_mva - 10000*acc_term);
-		vel_acc_gain=(1+vel_gain * (EV_mva - 1600 * (CPM_assist - 0.5985))	+ acc_gain * (EA_mva - 10000*acc_term));
-		if(vel_acc_gain<1)
-			vel_acc_gain=1;
-		Motor_Pwm = vel_acc_gain*(1 + target_gain) * (CPM_assist - 0.5985) + 0.5985 ;
+		vel_acc_gain = (1 + vel_gain * (EV_mva - 1600 * (CPM_assist - 0.5985))
+				+ acc_gain * (EA_mva - 10000 * acc_term));
+		if (vel_acc_gain < 1)
+			vel_acc_gain = 1;
+		Motor_Pwm = vel_acc_gain * (1 + target_gain) * (CPM_assist - 0.5985)
+				+ 0.5985;
 		Type_Check_fun();
 		break;
 	}
@@ -1253,16 +1276,63 @@ void Start_breaking() {
 	}
 }
 
-void Gait_score_calculation(){
-	Gait_score_degree=Encoder_deg_new-180;
+void Gait_score_calculation() {
+	//보행 점수용 각도로 변환
+	Gait_score_degree = Encoder_deg_new - 180;
+	if (Gait_score_degree < 0)
+		Gait_score_degree = Gait_score_degree + 180;
 
-	if(Gait_score_degree<0)
-		Gait_score_degree=Gait_score_degree+180;
+	//초기 1주기 버리고 시작
+	if (!start_record_bit) {
+		if ((Gait_score_degree - ex_gait_degree) < -170)
+			start_record_bit = 1;
+	}
 
+	// 180도 위상차가 나면
+	else if (start_record_bit) {
+		if ((Gait_score_degree - ex_gait_degree) < -170) {
+			foot_shift_bit = ~foot_shift_bit;
+			gait_bit=0;
+			//주기끝나면 버퍼 비우기, 계산
+			if (foot_shift_bit)
+				check_gait_score();
+		}
+		//환측 stance 상황
+		if (foot_shift_bit){
+			gait_normal_socre[gait_bit]=EV_mva;
+			++gait_bit;
+			normal_gait_size=gait_bit;
+		}
+
+		//건측 stance 상황
+		if(!foot_shift_bit){
+			gait_abnormal_socre[gait_bit]=EV_mva;
+			++gait_bit;
+			abnormal_gait_size=gait_bit;
+		}
+	}
+
+
+	ex_gait_degree = Gait_score_degree;
+}
+
+void check_gait_score(){
+	for(i=0; i<normal_gait_size; i++)
+		sum_no_gait_speed+=gait_normal_socre[i];
+	mean_no_gait_speed=sum_no_gait_speed/normal_gait_size;
+
+	for(i=0; i<abnormal_gait_size; i++)
+		sum_abno_gait_speed+=gait_abnormal_socre[i];
+	mean_abno_gait_speed=sum_abno_gait_speed/abnormal_gait_size;
+
+
+	for (i = 0; i < 800; i++){
+		gait_abnormal_socre[i] = 0;
+		gait_normal_socre[i] = 0;
+	}
 
 
 }
-
 interrupt void cpu_timer0_isr(void) // cpu timer 현재 제어주파수 100Hz
 {
 	MetabolizeRehabilitationRobot();
