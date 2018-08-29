@@ -106,10 +106,12 @@ double w = 0.03604;
 double CPM_assist = 0;
 int pause_finish = 0;
 int init_bit = 0;
-double vel_gain = 0.0008;
-double acc_gain = 0.0001;
+double vel_gain = 0.05;//0.008
+double acc_gain = 0.0001;//0.002
 double EA_mva = 0;
 double acc_term=0;
+double vel_acc_gain=0;
+double Gait_score_degree=0;
 // @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 
 //정준이의 함수------------------
@@ -130,6 +132,7 @@ void Reg_setting_fun();
 //void Initialize_main_fun();
 void Encoder_position_renew();
 void Encoder_value_calculation();
+void Gait_score_calculation();
 //------------------------
 
 // PWM Duty 변수 선언, 함수 선언
@@ -1162,7 +1165,10 @@ void TrainAbnormalPerson() {
 
 		//0.0008 0.0001
 		//Motor_Pwm = (1 + target_gain) * (CPM_assist - 0.5985) + 0.5985+ vel_gain * (EV_mva - 1600 * (CPM_assist - 0.5985))	+ acc_gain * (EA_mva - 10000*acc_term);
-		Motor_Pwm = (1+vel_gain * (EV_mva - 1600 * (CPM_assist - 0.5985))	+ acc_gain * (EA_mva - 10000*acc_term))*(1 + target_gain) * (CPM_assist - 0.5985) + 0.5985 ;
+		vel_acc_gain=(1+vel_gain * (EV_mva - 1600 * (CPM_assist - 0.5985))	+ acc_gain * (EA_mva - 10000*acc_term));
+		if(vel_acc_gain<1)
+			vel_acc_gain=1;
+		Motor_Pwm = vel_acc_gain*(1 + target_gain) * (CPM_assist - 0.5985) + 0.5985 ;
 		Type_Check_fun();
 		break;
 	}
@@ -1247,6 +1253,16 @@ void Start_breaking() {
 	}
 }
 
+void Gait_score_calculation(){
+	Gait_score_degree=Encoder_deg_new-180;
+
+	if(Gait_score_degree<0)
+		Gait_score_degree=Gait_score_degree+180;
+
+
+
+}
+
 interrupt void cpu_timer0_isr(void) // cpu timer 현재 제어주파수 100Hz
 {
 	MetabolizeRehabilitationRobot();
@@ -1265,6 +1281,7 @@ interrupt void cpu_timer0_isr(void) // cpu timer 현재 제어주파수 100Hz
 
 	IncreaseTime();
 	TrainAbnormalPerson();
+	Gait_score_calculation();
 
 	if (IsEnd())
 		BeNormal();
