@@ -7,6 +7,7 @@
 #include "stdlib.h"
 #include "math.h"
 #include "string.h"
+#include "variable.h"
 // pragma CODE_SECTION -> Flash에서 RAM으로 함수를 옮기기 위한 작업 .
 #pragma CODE_SECTION(Encoder_define,"ramfuncs")
 #pragma CODE_SECTION(Uart_transmit,"ramfuncs")
@@ -18,114 +19,8 @@
 #pragma CODE_SECTION(TrainAbnormalPerson,"ramfuncs")
 #pragma CODE_SECTION(check_gait_score,"ramfuncs")
 
-extern Uint16 RamfuncsLoadStart;
-extern Uint16 RamfuncsLoadEnd;
-extern Uint16 RamfuncsRunStart;
-
 // CPU timer0 선언
 interrupt void cpu_timer0_isr(void);
-float32 Cpu_Clk;
-float32 Timer_Prd;
-Uint16 i = 0, M_i = 0, E_i = 0;
-
-#define SYSCLK      150E6   /* 150MHz */
-#define TBCLK       150E6   /* 150MHz */
-#define PWMCARRIER  20E3    /* 20kHz */
-
-// Encoder 변수 선언 , 함수 선언
-Uint32 Encoder[10], Encoder_sum = 0, Encoder_cnt = 0, E_90_cnt = 0;
-double Encoder_deg_new = 0;
-double Encoder_deg_old = 0;
-double Encoder_deg = 0;
-Uint32 Encoder_revcnt = 0;
-double Encoder_vel = 0;
-double E_vel_deg_new = 0;
-double E_vel_deg_old = 0;
-double EV_Buff[30];
-double EV_mva = 0;
-double EV_mva_old = 0;
-void Encoder_define();
-
-// @@@@@@@정준이의 변수선언@@@@@@@@
-int break_timer = 0;
-float break_duty = 0;
-double move_dis = 0;
-int a = 0;
-unsigned int mode_num = 0;
-unsigned int leg_num = 0;
-unsigned int start_bit = 0;
-unsigned int end_bit = 0;
-float Motor_Pwm = 0;
-
-double target_dis = 0;
-char target_dis_1 = 0;
-char target_dis_2 = 0;
-double training_timer = 0;
-
-double target_time = 0;
-double target_hour = 0;
-double target_min = 0;
-double target_sec = 0;
-double time_now = 0;
-
-unsigned int Type_sel = 0;
-double target_gain = 0;
-double ratio_gain = 0;
-unsigned int pause_bit = 0;
-double velocity = 0;
-double under_velocity = 0;
-
-int time_now_hour = 0;
-int time_now_min = 0;
-int time_now_min_10 = 0;
-int time_now_min_1 = 0;
-int move_distance_4 = 0;
-int move_distance_3 = 0;
-int move_distance_2 = 0;
-int move_distance_1 = 0;
-
-double smooth_rise = 0;
-
-double a0 = 0.7086;
-double a1 = 0.04348;
-double b1 = 0.04126;
-double a2 = -0.03393;
-double b2 = -0.01856;
-double a3 = 0.01754;
-double b3 = 0.0006721;
-double a4 = -0.01032;
-double b4 = 0.003381;
-double a5 = 0.004178;
-double b5 = -0.003621;
-double a6 = -0.001026;
-double b6 = 0.002338;
-double a7 = -0.0004222;
-double b7 = -0.0008692;
-double a8 = 0.0005095;
-double b8 = 0.0002923;
-double w = 0.03604;
-double CPM_assist = 0;
-int pause_finish = 0;
-int init_bit = 0;
-double vel_gain = 0.05; //0.008
-double acc_gain = 0.0001; //0.002
-double EA_mva = 0;
-double acc_term = 0;
-double vel_acc_gain = 0;
-double Gait_score_degree = 0;
-unsigned int start_record_bit = 0;
-double ex_gait_degree = 180;
-double gait_normal_socre[800];
-double gait_abnormal_socre[800];
-unsigned int gait_bit=0;
-int foot_shift_bit=0;
-double normal_gait_size=0;
-double abnormal_gait_size=0;
-double sum_no_gait_speed=0;
-double sum_abno_gait_speed=0;
-double mean_abno_gait_speed=0;
-double mean_no_gait_speed=0;
-double gait_score=0;
 
 // @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 
@@ -151,12 +46,8 @@ void Gait_score_calculation();
 void check_gait_score();
 //------------------------
 
-// PWM Duty 변수 선언, 함수 선언
-float32 PwmCarrier;
-float32 PwmDuty, BrakeDuty = 0;
 void InitEPwm1Module(void);
 void InitEPwm2Module(void);
-
 // 통신 설정을 위한 함수
 void scia_echoback_init(void);
 void scia_fifo_init(void);
@@ -164,29 +55,17 @@ void scib_echoback_init(void);
 void scib_fifo_init(void);
 void scic_echoback_init(void);
 void scic_fifo_init(void);
-
 // App 전송
 void BT_transmit();
 void BT_Put_String(char *BT_string);
-
 // Data 전송을 위한 함수
 void Uart_transmit();
 void UART_Put_String(char *Uart_string);
-
 // Motor를 LCD 없이 동작시키기 위한 통신
 void Motor_transmit();
 void Motor_Put_String(char *Motor_string);
 void Motor_Put_Char(unsigned char Uart_string);
-
-// 통신 변수 선언.
-Uint16 TimerCount = 0, MotorCount = 0, TimerCount_2 = 0;
-char UT1[100], MT1[50], BT1[50];
-unsigned char Motor_char[15], Motor_char_s[10];
-Uint16 Mt_cnt = 0, m = 0, c = 0;
-
 interrupt void sciaRxFifoIsr(void);
-char RxBuff[16];
-char Receivedbuff;
 
 // @@@@@@@@@@@@@@@@@@@@@@@Main 함수 @@@@@@@@@@@@@@@@@@@@@@@
 void main(void) {
@@ -281,11 +160,10 @@ void main(void) {
 	for (i = 0; i < 16; i++)
 		RxBuff[i] = 0;
 
-	for (i = 0; i < 800; i++){
+	for (i = 0; i < 800; i++) {
 		gait_abnormal_socre[i] = 0;
 		gait_normal_socre[i] = 0;
 	}
-
 
 	EINT;
 	// Enable Global interrupt INTM
@@ -472,9 +350,25 @@ void clear_variable() {
 	RxBuff[11] = 0;
 	smooth_rise = 0;
 	CPM_assist = 0;
+	gait_score=0;
+	mean_abno_gait_speed=0;
+	mean_no_gait_speed=0;
+	normal_gait_size=0;
+	abnormal_gait_size=0;
+	foot_shift_bit=0;
+	gait_bit=0;
+	ex_gait_degree=180;
+	start_record_bit=0;
+	Score_speed=0;
+	Target_speed=0;
+
 
 	for (i = 0; i < 30; i++) {
 		EV_Buff[i] = 0;
+	}
+	for (i = 0; i < 800; i++) {
+		gait_abnormal_socre[i] = 0;
+		gait_normal_socre[i] = 0;
 	}
 }
 
@@ -679,10 +573,9 @@ void Motor_Put_String(char *Motor_string) {
 }
 
 void BT_transmit() {
-
 	sprintf(BT1, "!s%d.%dt%d%d%dd%d.%d%d?\n\0", (int) velocity,
-			(int) gait_score, time_now_hour, time_now_min_10,
-			time_now_min_1, move_distance_1, move_distance_2, move_distance_3);
+			(int) under_velocity, time_now_hour, time_now_min_10, time_now_min_1,
+			(int)Add_score, move_distance_2, move_distance_3);
 	//시간설정
 	if (Type_sel == 2) {
 		if (time_now > target_sec)
@@ -699,8 +592,7 @@ void BT_transmit() {
 
 void Uart_transmit() {
 	//@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@테스트시 넣는 코드@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@//
-	sprintf(UT1, "%ld,%ld,%ld\n\0", (long) (Motor_Pwm * 10000),
-			(long) (Encoder_deg_new * 100), (long) (EV_mva * 10000));
+	sprintf(UT1, "%ld,%ld,%ld,%d,%d,%d\n\0", (long) (Motor_Pwm * 10000), (long) (Encoder_deg_new * 100), (long) (EV_mva * 10000),(int)abnormal_gait_size,(int)normal_gait_size,(int)gait_score);
 //@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@재활치료시 넣는 코드@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@//
 	/*	sprintf(UT1,"!s%d.%dt%d%d%dd%d.%d%d?\n\0",(int)velocity,(int)under_velocity,time_now_hour,time_now_min_10,time_now_min_1,  move_distance_1, move_distance_2,move_distance_3);
 
@@ -1052,12 +944,12 @@ void MetabolizeRehabilitationRobot() {
 			//BT_transmit(); //테스트시 넣음
 		}
 	}
-	 // MATLAB 2 -> 100Hz Bluetooth 40 -> 5Hz
-	 if (TimerCount == 20) {
-	 TimerCount = 0;
-	 if (start_bit && (!end_bit))
-		 BT_transmit();
-	 }
+	// MATLAB 2 -> 100Hz Bluetooth 40 -> 5Hz
+	if (TimerCount == 20) {
+		TimerCount = 0;
+		if (start_bit && (!end_bit))
+			BT_transmit();
+	}
 
 }
 
@@ -1140,7 +1032,11 @@ void TrainAbnormalPerson() {
 				+ b7 * sin(7 * Encoder_deg_new * w)
 				+ a8 * cos(8 * Encoder_deg_new * w)
 				+ b8 * sin(8 * Encoder_deg_new * w);
-		Motor_Pwm = (1 + target_gain) * (CPM_assist - 0.5985) + 0.5985;
+		if (foot_shift_bit)
+			Abnormal_assist_gain = 1;
+		if (!foot_shift_bit)
+			Abnormal_assist_gain = 1 + ratio_gain;
+		Motor_Pwm = (1 + target_gain)*Abnormal_assist_gain * (CPM_assist - 0.5985) + 0.5985;
 		Type_Check_fun();
 		break;
 	case 2:
@@ -1189,9 +1085,16 @@ void TrainAbnormalPerson() {
 		//Motor_Pwm = (1 + target_gain) * (CPM_assist - 0.5985) + 0.5985+ vel_gain * (EV_mva - 1600 * (CPM_assist - 0.5985))	+ acc_gain * (EA_mva - 10000*acc_term);
 		vel_acc_gain = (1 + vel_gain * (EV_mva - 1600 * (CPM_assist - 0.5985))
 				+ acc_gain * (EA_mva - 10000 * acc_term));
+
 		if (vel_acc_gain < 1)
 			vel_acc_gain = 1;
-		Motor_Pwm = vel_acc_gain * (1 + target_gain) * (CPM_assist - 0.5985)
+
+		if (foot_shift_bit)
+			Abnormal_assist_gain = 1;
+		if (!foot_shift_bit)
+			Abnormal_assist_gain = 1 + ratio_gain;
+
+		Motor_Pwm = vel_acc_gain * Abnormal_assist_gain * (CPM_assist - 0.5985)
 				+ 0.5985;
 		Type_Check_fun();
 		break;
@@ -1278,70 +1181,89 @@ void Start_breaking() {
 }
 
 void Gait_score_calculation() {
-	//보행 점수용 각도로 변환
-	Gait_score_degree = Encoder_deg_new - 180;
-	if (Gait_score_degree < 0)
-		Gait_score_degree = Gait_score_degree + 180;
+	//보행 점수용 각도로 변
+	Gait_score_degree = Encoder_deg_new - 120;
+	if (Gait_score_degree <= 0)
+		Gait_score_degree = Gait_score_degree + 360;
+	if (Gait_score_degree >= 180)
+		Gait_score_degree = Gait_score_degree - 180;
 
 	//초기 1주기 버리고 시작
 	if (!start_record_bit) {
-		if ((Gait_score_degree - ex_gait_degree) < -170)
+		if ((Gait_score_degree - ex_gait_degree) < -150)
 			start_record_bit = 1;
 	}
 
 	// 180도 위상차가 나면
 	else if (start_record_bit) {
-		if ((Gait_score_degree - ex_gait_degree) < -170) {
-			foot_shift_bit = ~foot_shift_bit;
-			gait_bit=0;
+		if ((Gait_score_degree - ex_gait_degree) < -150) {
+			foot_shift_bit = !foot_shift_bit;
+			gait_bit = 0;
 
 			//주기끝나면 버퍼 비우기, 계산
 			if (foot_shift_bit)
 				check_gait_score();
 		}
 		//환측 stance 상황
-		if (foot_shift_bit){
-			gait_normal_socre[gait_bit]=EV_mva * 0.0088;
+		if (foot_shift_bit) {
+			gait_normal_socre[gait_bit] = EV_mva * 0.0088;
 			++gait_bit;
-			normal_gait_size=gait_bit;
+			normal_gait_size = gait_bit;
 		}
 
 		//건측 stance 상황
-		if(!foot_shift_bit){
-			gait_abnormal_socre[gait_bit]=EV_mva* 0.0088;
+		if (!foot_shift_bit) {
+			gait_abnormal_socre[gait_bit] = EV_mva * 0.0088;
 			++gait_bit;
-			abnormal_gait_size=gait_bit;
+			abnormal_gait_size = gait_bit;
 		}
 	}
-
 
 	ex_gait_degree = Gait_score_degree;
 }
 
-void check_gait_score(){
-	for(i=0; i<normal_gait_size; i++)
-		sum_no_gait_speed+=gait_normal_socre[i];
-	mean_no_gait_speed=sum_no_gait_speed/normal_gait_size;
-	mean_no_gait_speed=roundf(mean_no_gait_speed*100)/100;
+void check_gait_score() {
+	//좌측, 우측 속도비교
+	for (i = 0; i < normal_gait_size; i++)
+		sum_no_gait_speed += abs(gait_normal_socre[i]);
+	mean_no_gait_speed = sum_no_gait_speed / normal_gait_size;
+	mean_no_gait_speed = roundf(mean_no_gait_speed * 100) / 100;
 
-	for(i=0; i<abnormal_gait_size; i++)
-		sum_abno_gait_speed+=gait_abnormal_socre[i];
-	mean_abno_gait_speed=sum_abno_gait_speed/abnormal_gait_size;
-	mean_abno_gait_speed=roundf(mean_abno_gait_speed*100)/100;
+	for (i = 0; i < abnormal_gait_size; i++)
+		sum_abno_gait_speed += abs(gait_abnormal_socre[i]);
+	mean_abno_gait_speed = sum_abno_gait_speed / abnormal_gait_size;
+	mean_abno_gait_speed = roundf(mean_abno_gait_speed * 100) / 100;
+
+	gait_score = (110 - abs((mean_abno_gait_speed - mean_no_gait_speed)*100));
+	if (gait_score < 0)
+		gait_score = 0;
+	if (gait_score > 100)
+		gait_score = 100;
+
+	//목표속도 비교
+	Score_speed=100-10*(Target_speed-velocity);
+	if (Score_speed<0)
+		Score_speed=0;
+	if (Score_speed>100)
+		Score_speed=100;
+
+	//얼굴점수
 
 
-	gait_score=(100-abs(mean_abno_gait_speed - mean_no_gait_speed));
-	if(gait_score<0)
-		gait_score=0;
+
+	//최종점수 계산
+	Add_score=(Score_speed+gait_score)/2;
+
 
 	//버퍼비우기
-	for (i = 0; i < 800; i++){
+	for (i = 0; i < 800; i++) {
 		gait_abnormal_socre[i] = 0;
 		gait_normal_socre[i] = 0;
 	}
-	abnormal_gait_size=0;
-	normal_gait_size=0;
-
+	sum_no_gait_speed=0;
+	sum_abno_gait_speed=0;
+	abnormal_gait_size = 0;
+	normal_gait_size = 0;
 
 }
 interrupt void cpu_timer0_isr(void) // cpu timer 현재 제어주파수 100Hz
