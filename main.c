@@ -1,6 +1,6 @@
 // 소속 : 서울과학기술대 휴머노이드로봇 연구2실
 // 이름 : 김정준
-// 날짜 : 2018-07-24
+// 날짜 : 2018-10-10
 // 용도 : 모드별 알고리즘 실험데이터
 #include "DSP28x_Project.h"
 #include "stdio.h"
@@ -35,7 +35,7 @@ void UpdateInformation();
 int IsStart();
 void BeNormal();
 int IsPause();
-void Type_Check_fun();
+int Type_Check_fun();
 void Reword_inflection_point();
 void Start_breaking();
 void Reg_setting_fun();
@@ -44,6 +44,7 @@ void Encoder_position_renew();
 void Encoder_value_calculation();
 void Gait_score_calculation();
 void check_gait_score();
+void break_time();
 //------------------------
 
 void InitEPwm1Module(void);
@@ -121,25 +122,6 @@ void main(void) {
 	scic_fifo_init();      // Initialize the SCI FIFO
 	scic_echoback_init();  // Initalize SCI for echoback
 
-	// ADC 설정
-	/*
-	 AdcRegs.ADCTRL3.bit.ADCCLKPS = 3;    // ADCCLK = HSPCLK/(ADCCLKPS*2)/(CPS+1)
-	 AdcRegs.ADCTRL1.bit.CPS = 1;         // ADCCLK = 75MHz/(3*2)/(1+1) = 6.25MHz
-	 AdcRegs.ADCTRL1.bit.ACQ_PS = 3;     // 샘플/홀드 사이클 = ACQ_PS + 1 = 4 (ADCCLK기준)
-	 AdcRegs.ADCTRL1.bit.SEQ_CASC = 1; // 시퀀스 모드 설정: 직렬 시퀀스 모드 (0:병렬 모드, 1:직렬 모드)
-	 AdcRegs.ADCMAXCONV.bit.MAX_CONV1 = 8;  // ADC 채널수 설정: 1개(=MAX_CONV+1)채널을 ADC
-
-	 AdcRegs.ADCCHSELSEQ1.bit.CONV00 = 0;      // ADC 순서 설정: 첫번째로 ADCINA2 채널을 ADC
-	 AdcRegs.ADCCHSELSEQ1.bit.CONV01 = 1;
-	 AdcRegs.ADCCHSELSEQ1.bit.CONV02 = 2;
-	 AdcRegs.ADCCHSELSEQ1.bit.CONV03 = 3;
-	 AdcRegs.ADCCHSELSEQ2.bit.CONV04 = 4;
-	 AdcRegs.ADCCHSELSEQ2.bit.CONV05 = 5;
-	 AdcRegs.ADCCHSELSEQ2.bit.CONV06 = 6;
-	 AdcRegs.ADCCHSELSEQ2.bit.CONV07 = 7;
-	 AdcRegs.ADCTRL2.bit.EPWM_SOCB_SEQ = 1;     // ePWM_SOCB로 ADC 시퀀스 시동
-	 AdcRegs.ADCTRL2.bit.INT_ENA_SEQ1 = 1;      // ADC 시퀀스 완료시 인터럽트 발생 설정
-	 */
 	//ePWM_SOCB 이벤트 트리거 설정
 	EPwm3Regs.ETSEL.bit.SOCBEN = 1;            // SOCB 이벤트 트리거 Enable
 	EPwm3Regs.ETSEL.bit.SOCBSEL = 2;           // SCCB 트리거 조건 : 카운터 주기 일치 시
@@ -326,28 +308,10 @@ void clear_variable() {
 	Type_sel = 0;
 	target_dis = 0;
 	E_vel_deg_new = 0;
-	move_distance_1 = 0;
-	move_distance_2 = 0;
-	move_distance_3 = 0;
-	move_distance_4 = 0;
-	time_now_hour = 0;
-	time_now_min_10 = 0;
-	time_now_min = 0;
 	Encoder_revcnt = 0;
 	velocity = 0;
 	EV_mva = 0;
-	RxBuff[0] = 0;
-	RxBuff[1] = 0;
-	RxBuff[2] = 0;
-	RxBuff[3] = 0;
-	RxBuff[4] = 0;
-	RxBuff[5] = 0;
-	RxBuff[6] = 0;
-	RxBuff[8] = 0;
-	RxBuff[7] = 0;
-	RxBuff[9] = 0;
-	RxBuff[10] = 0;
-	RxBuff[11] = 0;
+
 	smooth_rise = 0;
 	CPM_assist = 0;
 	gait_score=0;
@@ -362,11 +326,22 @@ void clear_variable() {
 	Score_speed=0;
 	Target_speed=0;
 	Add_score=0;
+	slow_start_timer=0;
+	break_time_now=0;
+	Train_num=0;
+	Train_target=0;
+	time_now_min_10=0;
+	time_now_min_1=0;
+	time_now_sec_10=0;
+	time_now_sec_1=0;
+	move_distance_1000=0;
+	move_distance_100=0;
+	move_distance_10=0;
+	move_distance_1=0;
 
 
-	for (i = 0; i < 30; i++) {
-		EV_Buff[i] = 0;
-	}
+	for (i = 0; i < 16; i++) RxBuff[i] = 0;
+	for (i = 0; i < 30; i++) EV_Buff[i] = 0;
 	for (i = 0; i < 800; i++) {
 		gait_abnormal_socre[i] = 0;
 		gait_normal_socre[i] = 0;
@@ -574,9 +549,13 @@ void Motor_Put_String(char *Motor_string) {
 }
 
 void BT_transmit() {
-	sprintf(BT1, "!s%d.%dt%d%d%dd%d.%d%d?\n\0", (int) velocity,
-			(int) under_velocity, time_now_hour, time_now_min_10, time_now_min_1,
-			(int)Add_score, move_distance_2, move_distance_3);
+	sprintf(BT1, "!s%d.%dt%d%d%d%dd%d%d%d%d?\n\0",
+			(int) velocity, (int) under_velocity,
+			time_now_min_10, time_now_min_1, time_now_sec_10, time_now_sec_1,
+			move_distance_1000, move_distance_100, move_distance_10,move_distance_1 );
+
+
+
 	//시간설정
 	if (Type_sel == 2) {
 		if (time_now > target_sec)
@@ -595,22 +574,16 @@ void Uart_transmit() {
 	//@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@테스트시 넣는 코드@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@//
 	sprintf(UT1, "%ld,%ld,%ld,%ld`\n\0", (long) (Motor_Pwm * 10000), (long) (Encoder_deg_new * 100), (long) (EV_mva * 10000),(long) (Add_score*100 ));
 //@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@재활치료시 넣는 코드@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@//
-	/*	sprintf(UT1,"!s%d.%dt%d%d%dd%d.%d%d?\n\0",(int)velocity,(int)under_velocity,time_now_hour,time_now_min_10,time_now_min_1,  move_distance_1, move_distance_2,move_distance_3);
+	/*
+	 *
+	sprintf(BT1, "!s%d.%dt%d%d%d%dd%d%d%d%df%d%d%dc%d%d%d?\n\0",
+			(int) velocity, (int) under_velocity,
+			time_now_min_10, time_now_min_1, time_now_sec_10, time_now_sec_1,
+			move_distance_1000, move_distance_100, move_distance_10,move_distance_1,
+			face_score_100,face_score_10,face_score_1,
+			Gait_score_100, Gait_score_10, Gait_score_1 );
 
-	 if(Type_sel==2)//시간설정
-	 {
-	 if(time_now>target_sec)
-	 {
-	 sprintf(UT1,"!e?");
-	 }
-	 }
-	 else if(Type_sel==1)//거리설정
-	 {
-	 if(move_dis>target_dis)
-	 {
-	 sprintf(UT1,"!e?");
-	 }
-	 }
+
 	 */
 //@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@//
 	UART_Put_String(UT1);
@@ -665,7 +638,7 @@ void Encoder_value_calculation() {
 		Encoder_revcnt++; // 회전수 체크
 
 	E_vel_deg_new = Encoder_revcnt * 360 + Encoder_deg_new;
-	move_dis = 0.000001 * E_vel_deg_new * 880 / 360; //총 회전각도*각거리?
+	move_dis = 0.001 * E_vel_deg_new * 880 / 360; //총 회전각도*각거리?
 	Encoder_vel = (E_vel_deg_new - E_vel_deg_old) * 100; // Angular velocity dt=0.005s
 
 }
@@ -792,27 +765,46 @@ interrupt void sciaRxFifoIsr(void) {
 
 	Receivedbuff = SciaRegs.SCIRXBUF.bit.RXDT;
 
-	if (a == 0) {
-		if (Receivedbuff == '!') {
+	if (a == 0)
+	{
+		if (Receivedbuff == '!')
+		{
 			RxBuff[a] = Receivedbuff;
 			a++;
-		} else {
+		}
+		else
+		{
 			RxBuff[6] = 0;
 			a = 0;
 		}
-	} else if (a == 1) {
+	}
+	else if (a == 1)
+	{
 		RxBuff[a] = Receivedbuff;
 		a++;
-	} else if (a == 2) {
+	}
+	else if (a == 2)
+	{
 		RxBuff[a] = Receivedbuff;
 		a++;
-	} else if (a == 3) {
+	}
+	else if (a == 3)
+	{
 		RxBuff[a] = Receivedbuff;
 		a++;
-	} else if (a == 4) {
+	}
+	else if (a == 4)
+	{
 		RxBuff[a] = Receivedbuff;
 		a++;
-	} else if (a == 5) {
+	}
+	else if (a == 5)
+	{
+		RxBuff[a] = Receivedbuff;
+		a++;
+	}
+	else if (a == 6)
+	{
 		RxBuff[a] = Receivedbuff;
 		a++;
 	}
@@ -820,7 +812,6 @@ interrupt void sciaRxFifoIsr(void) {
 	if (Receivedbuff == '?') {
 		RxBuff[a] = Receivedbuff;
 		a = 0;
-
 	}
 
 	if (RxBuff[0] == '!' && RxBuff[1] == 'S' && RxBuff[2] == '?') { //////////////////////////////>>>>>>>>>>>>?>?????????????????????
@@ -838,7 +829,6 @@ interrupt void sciaRxFifoIsr(void) {
 			start_bit = 0;
 			RxBuff[6] = 0;
 		}
-
 	}
 
 	else if (RxBuff[0] == '!' && RxBuff[1] == 'E' && RxBuff[2] == '?') {
@@ -846,82 +836,87 @@ interrupt void sciaRxFifoIsr(void) {
 		RxBuff[6] = 0;
 		sprintf(UT1, "!e?");
 		UART_Put_String(UT1);
-	} else if (RxBuff[0] == '!' && RxBuff[1] == 'P' && RxBuff[2] == '1'
+	}
+	else if (RxBuff[0] == '!' && RxBuff[1] == 'P' && RxBuff[2] == '1'
 			&& RxBuff[3] == '?') {
 		pause_bit = 1;
 		RxBuff[6] = 0;
-	} else if (RxBuff[0] == '!' && RxBuff[1] == 'P' && RxBuff[2] == '2'
+	}
+	else if (RxBuff[0] == '!' && RxBuff[1] == 'P' && RxBuff[2] == '2'
 			&& RxBuff[3] == '?') {
 		pause_bit = 0;
 		pause_finish = 0;
 		RxBuff[6] = 0;
 		pause_finish = 0;
-	} else if (RxBuff[0] == '!' && RxBuff[1] == 'M' && RxBuff[2] == '1'
+	}
+	else if (RxBuff[0] == '!' && RxBuff[1] == 'M' && RxBuff[2] == '1'
 			&& RxBuff[3] == '?') {
 		mode_num = 1;
 		RxBuff[6] = 0;
-	} else if (RxBuff[0] == '!' && RxBuff[1] == 'M' && RxBuff[2] == '2'
+	}
+	else if (RxBuff[0] == '!' && RxBuff[1] == 'M' && RxBuff[2] == '2'
 			&& RxBuff[3] == '?') {
 		target_gain = 0;
 		mode_num = 2;
 		RxBuff[6] = 0;
-	} else if (RxBuff[0] == '!' && RxBuff[1] == 'M' && RxBuff[2] == '3'
+	}
+	else if (RxBuff[0] == '!' && RxBuff[1] == 'M' && RxBuff[2] == '3'
 			&& RxBuff[3] == '?') {
 		mode_num = 3;
 		RxBuff[6] = 0;
 	}
-
 	else if (RxBuff[0] == '!' && RxBuff[1] == 'H' && RxBuff[2] == 'R'
-			&& RxBuff[3] == '?') {
+		&& RxBuff[3] == '?') {
 		leg_num = 1;
 		ex_gait_degree = 180;
 		RxBuff[6] = 0;
-	} else if (RxBuff[0] == '!' && RxBuff[1] == 'H' && RxBuff[2] == 'L'
+	}
+	else if (RxBuff[0] == '!' && RxBuff[1] == 'H' && RxBuff[2] == 'L'
 			&& RxBuff[3] == '?') {
 		leg_num = 2;
 		ex_gait_degree = 0;
 		RxBuff[6] = 0;
 	}
-
-	else if (RxBuff[0] == '!' && RxBuff[1] == 'D' && RxBuff[5] == '?') {
+	else if (RxBuff[0] == '!' && RxBuff[1] == 'D' && RxBuff[6] == '?') {
 		target_dis = atof(&RxBuff[2]);
 		target_dis = target_dis * 0.01;
 
 		Type_sel = 1;
 		RxBuff[6] = 0;
-	} else if (RxBuff[0] == '!' && RxBuff[1] == 'T' && RxBuff[5] == '?') {
+	}
+	else if (RxBuff[0] == '!' && RxBuff[1] == 'T' && RxBuff[5] == '?') {
 		target_time = atof(&RxBuff[2]);
-		target_time = target_time / 100;
-
-		target_hour = (int) target_time;
-		target_min = (int) (target_time * 100 + 0.5) - target_hour * 100;
-		target_sec = target_hour * 3600 + target_min * 60;
+		Train_target =(int)target_time % 10;
+		Train_target++;
+		target_time = (int)target_time / 10;
+		target_time = (int)target_time * 60;
 
 		Type_sel = 2;
 		RxBuff[6] = 0;
-	} else if (RxBuff[0] == '!' && RxBuff[1] == 'G' && RxBuff[4] == '?') {
-		if (mode_num != 2) {
+	}
+	else if (RxBuff[0] == '!' && RxBuff[1] == 'G' && RxBuff[4] == '?') {
+		if (mode_num ==1) {
 			target_gain = atof(&RxBuff[2]);
-
-			RxBuff[6] = 0;
-		} else {
 			RxBuff[6] = 0;
 		}
+		else RxBuff[6] = 0;
 	} else if (RxBuff[0] == '!' && RxBuff[1] == 'R' && RxBuff[4] == '?') {
-		if (mode_num == 3) {
+		if (mode_num == 2) {
 			ratio_gain = atof(&RxBuff[2]);
 			ratio_gain = ratio_gain * 0.1;
 			RxBuff[6] = 0;
-		} else {
+		}
+		else RxBuff[6] = 0;
+	}
+	else if (RxBuff[0] == '!' && RxBuff[1] == 'K' && RxBuff[4] == '?') {
+		if (mode_num == 2) {
+			ratio_gain = atof(&RxBuff[2]);
+			ratio_gain = ratio_gain * 0.1;
 			RxBuff[6] = 0;
 		}
-	} else if (RxBuff[0] == '!' && RxBuff[1] == 'K' && RxBuff[4] == '?') {
-		ratio_gain = atof(&RxBuff[2]);
-		ratio_gain = ratio_gain * 0.1;
-		RxBuff[6] = 0;
-	} else {
-		RxBuff[6] = 0;
+		else RxBuff[6] = 0;
 	}
+	else RxBuff[6] = 0;
 
 	SciaRegs.SCIFFRX.bit.RXFFOVRCLR = 1;			// Clear Overflow flag
 	SciaRegs.SCIFFRX.bit.RXFFINTCLR = 1;			// Clear Interrupt flag
@@ -1038,13 +1033,13 @@ void TrainAbnormalPerson() {
 		if (!foot_shift_bit)
 			Abnormal_assist_gain = 1 + ratio_gain;
 		Motor_Pwm = (1 + target_gain)*Abnormal_assist_gain * (CPM_assist - 0.5985) + 0.5985;
-		Type_Check_fun();
+
 		break;
 	case 2:
 		Start_breaking();
 		Reword_inflection_point();
 		Motor_Pwm = EV_mva * 40 * smooth_rise;
-		Type_Check_fun();
+
 		break;
 	case 3:
 		Start_breaking();
@@ -1097,7 +1092,7 @@ void TrainAbnormalPerson() {
 
 		Motor_Pwm = vel_acc_gain * Abnormal_assist_gain * (CPM_assist - 0.5985)
 				+ 0.5985;
-		Type_Check_fun();
+
 		break;
 	}
 
@@ -1105,21 +1100,28 @@ void TrainAbnormalPerson() {
 
 void UpdateInformation() {
 //시간변수 업데이트
-	time_now_min = time_now / 60;
-	time_now_min = time_now_min % 60;
-	time_now_min_10 = time_now_min / 10;
-	time_now_min_1 = time_now_min - time_now_min_10 * 10;
-	time_now_hour = time_now / 3600;
-	time_now_hour = time_now_hour % 60;
+	time_now_sec_1 = time_now % 60;
+	time_now_sec_1 = time_now_sec_1 % 10;
+
+	time_now_sec_10 = time_now % 60;
+	time_now_sec_10 = time_now_sec_10 /10;
+
+	time_now_min_1 = time_now / 60;
+	time_now_min_1 = time_now_min_1 % 60;
+	time_now_min_1 = time_now_min_1 % 10;
+
+	time_now_min_10 = time_now / 60;
+	time_now_min_10 = time_now_min_10 % 60;
+	time_now_min_10 = time_now_min_10 / 10;
+
 //거리변수 업데이트
-	move_distance_4 = move_dis * 1000;
-	move_distance_4 = move_distance_4 % 1;
-	move_distance_3 = move_dis * 1000 / 10;
-	move_distance_3 = move_distance_3 % 10;
-	move_distance_2 = move_dis * 1000 / 100;
-	move_distance_2 = move_distance_2 % 100;
-	move_distance_1 = move_dis;
-	move_distance_1 = move_distance_1 % 1000;
+	move_distance_1000 = move_distance_100 = move_distance_10 = move_distance_1 = move_dis;
+	move_distance_1000 = move_distance_1000 / 1000;
+	move_distance_100 = move_distance_100 % 1000;
+	move_distance_100 = move_distance_100 / 100;
+	move_distance_10 = move_distance_10 % 100;
+	move_distance_10 = move_distance_10 /10;
+	move_distance_1 = move_distance_1 % 10;
 //각속도-->보행속도
 	velocity = EV_mva * 0.0088;
 	under_velocity = velocity * 100 - ((int) velocity) * 100;
@@ -1137,23 +1139,47 @@ void BeNormal() {
 		clear_variable();
 }
 
-void Type_Check_fun() {
+int Type_Check_fun() {
 	if (Type_sel == 1) {
 		if (move_dis > target_dis) {
 			end_bit = 1;
 			sprintf(BT1, "!e?");
 			BT_Put_String(BT1);
+			return 1;
 		}
 	}
 
 	else if (Type_sel == 2) {
-		if (time_now > target_sec) {
-			end_bit = 1;
-			sprintf(BT1, "!e?");
-			BT_Put_String(BT1);
+		if (time_now >= target_time) {
+			if((Train_target-Train_num)==1){
+				end_bit = 1;
+				sprintf(BT1, "!e?");
+				BT_Put_String(BT1);
+			}
+			else {
+				break_time();
+				return 1;
+			}
 		}
 	}
+	return 0;
+
 }
+
+void break_time(){
+	++break_timer;
+	// 휴식시간 확인 알려주는것
+	if (break_timer == 200) {
+		break_timer = 0;
+		++break_time_now;
+	}
+	if (break_time_now>=60){
+		time_now=0;
+		++Train_num;
+	}
+}
+
+
 
 void Reword_inflection_point() {
 	if (Encoder_deg_new >= 0 && Encoder_deg_new < 10)
@@ -1171,13 +1197,13 @@ void Reword_inflection_point() {
 
 }
 void Start_breaking() {
-	if ((break_timer < 400) && (start_bit == 1))   //2초동안 1차함수그래프로 브레이크 듀티 상승
+	if ((slow_start_timer < 400) && (start_bit == 1))   //2초동안 1차함수그래프로 브레이크 듀티 상승
 			{
-		break_timer++;
-		break_duty = 0.002075 * break_timer;
+		slow_start_timer++;
+		break_duty = 0.002075 * slow_start_timer;
 	}
-	if (break_timer >= 400) {
-		break_timer = 401;
+	if (slow_start_timer >= 400) {
+		slow_start_timer = 401;
 	}
 }
 
@@ -1283,6 +1309,8 @@ interrupt void cpu_timer0_isr(void) // cpu timer 현재 제어주파수 100Hz
 	if (IsPause())
 		goto RETURN;
 
+	if (Type_Check_fun())
+		goto RETURN;
 	IncreaseTime();
 	TrainAbnormalPerson();
 	Gait_score_calculation();
