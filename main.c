@@ -361,6 +361,7 @@ void clear_variable() {
 	start_record_bit=0;
 	Score_speed=0;
 	Target_speed=0;
+	Add_score=0;
 
 
 	for (i = 0; i < 30; i++) {
@@ -592,7 +593,7 @@ void BT_transmit() {
 
 void Uart_transmit() {
 	//@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@테스트시 넣는 코드@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@//
-	sprintf(UT1, "%ld,%ld,%ld\n\0", (long) (Motor_Pwm * 10000), (long) (Encoder_deg_new * 100), (long) (EV_mva * 10000));
+	sprintf(UT1, "%ld,%ld,%ld,%ld`\n\0", (long) (Motor_Pwm * 10000), (long) (Encoder_deg_new * 100), (long) (EV_mva * 10000),(long) (Add_score*100 ));
 //@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@재활치료시 넣는 코드@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@//
 	/*	sprintf(UT1,"!s%d.%dt%d%d%dd%d.%d%d?\n\0",(int)velocity,(int)under_velocity,time_now_hour,time_now_min_10,time_now_min_1,  move_distance_1, move_distance_2,move_distance_3);
 
@@ -1235,24 +1236,24 @@ void check_gait_score() {
 	mean_abno_gait_speed = roundf(mean_abno_gait_speed * 100) / 100;
 
 	gait_score = (110 - abs((mean_abno_gait_speed - mean_no_gait_speed)*100));
-	if (gait_score < 0)
+	if (gait_score < 30)
 		gait_score = 0;
-	if (gait_score > 100)
+	if (gait_score >= 95)
 		gait_score = 100;
 
-	//목표속도 비교
+	/*//목표속도 비교
 	Score_speed=100-10*(Target_speed-velocity);
 	if (Score_speed<0)
 		Score_speed=0;
 	if (Score_speed>100)
 		Score_speed=100;
 
-	//얼굴점수
+	//얼굴점수*/
 
 
 
 	//최종점수 계산
-	Add_score=(Score_speed+gait_score)/2;
+	Add_score=gait_score;
 
 
 	//버퍼비우기
