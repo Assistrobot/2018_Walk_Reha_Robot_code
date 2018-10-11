@@ -574,8 +574,15 @@ void BT_transmit() {
 }
 
 void Uart_transmit() {
+
+
+
+	sprintf(UT1, "!s%d.%dt%d%d%d%dd%d%d%d%d?\n\0",
+			(int) velocity, (int) under_velocity,
+			time_now_min_10, time_now_min_1, time_now_sec_10, time_now_sec_1,
+			move_distance_1000, move_distance_100, move_distance_10,move_distance_1 );
 	//@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@테스트시 넣는 코드@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@//
-	sprintf(UT1, "%ld,%ld,%ld,%ld`\n\0", (long) (Motor_Pwm * 10000), (long) (Encoder_deg_new * 100), (long) (EV_mva * 10000),(long) (Add_score*100 ));
+	//sprintf(UT1, "%ld,%ld,%ld,%ld`\n\0", (long) (Motor_Pwm * 10000), (long) (Encoder_deg_new * 100), (long) (EV_mva * 10000),(long) (Add_score*100 ));
 //@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@재활치료시 넣는 코드@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@//
 	/*
 	 *
@@ -945,8 +952,11 @@ void MetabolizeRehabilitationRobot() {
 	// MATLAB 2 -> 100Hz Bluetooth 40 -> 5Hz
 	if (TimerCount == 40) {
 		TimerCount = 0;
-		if (start_bit && (!end_bit))
-			BT_transmit();
+		if (start_bit && !end_bit){
+			if(!break_hold_uart)
+				BT_transmit();
+		//Uart_transmit();
+		}
 	}
 
 }
@@ -1128,7 +1138,7 @@ void UpdateInformation() {
 	move_distance_1 = move_distance_1 % 10;
 //각속도-->보행속도
 	velocity = EV_mva * 0.0088;
-	under_velocity = velocity * 100 - ((int) velocity) * 100;
+	under_velocity = velocity * 10 - ((int) velocity) * 10;
 }
 
 int IsEnd() {
@@ -1154,7 +1164,7 @@ int Type_Check_fun() {
 	}
 
 	else if (Type_sel == 2) {
-		if (time_now >= target_time) {
+		if (time_now > target_time) {
 			if((Train_target-Train_num)==1){
 				end_bit = 1;
 				sprintf(BT1, "!e?");
@@ -1162,8 +1172,8 @@ int Type_Check_fun() {
 			}
 			else {
 				break_time();
-				//break_duty=0;
-				//Motor_Pwm=0;
+				break_duty=0;
+				Motor_Pwm=0;
 				return 1;
 			}
 		}
@@ -1175,11 +1185,13 @@ int Type_Check_fun() {
 void break_time(){
 	++break_timer;
 	// 휴식시간 확인 알려주는것
+	break_hold_uart=1;
 	if (break_timer == 200) {
 		break_timer = 0;
 		++break_time_now;
 	}
 	if (break_time_now>=60){
+		break_hold_uart=0;
 		time_now=0;
 		break_time_now=0;
 		break_timer=0;
@@ -1317,10 +1329,10 @@ interrupt void cpu_timer0_isr(void) // cpu timer 현재 제어주파수 100Hz
 	if (IsPause())
 		goto RETURN;
 
-	if (Type_Check_fun()){
-		Robot_Initialize();
+	if (Type_Check_fun())
+		//Robot_Initialize();
 		goto RETURN;
-	}
+
 
 	IncreaseTime();
 	TrainAbnormalPerson();
