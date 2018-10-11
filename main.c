@@ -18,6 +18,7 @@
 #pragma CODE_SECTION(BT_transmit,"ramfuncs")
 #pragma CODE_SECTION(TrainAbnormalPerson,"ramfuncs")
 #pragma CODE_SECTION(check_gait_score,"ramfuncs")
+#pragma CODE_SECTION(UpdateInformation,"ramfuncs")
 
 // CPU timer0 선언
 interrupt void cpu_timer0_isr(void);
@@ -141,6 +142,7 @@ void main(void) {
 
 	for (i = 0; i < 16; i++)
 		RxBuff[i] = 0;
+	for (i = 0; i < 50; i++) BT1[i] = 0;
 
 	for (i = 0; i < 800; i++) {
 		gait_abnormal_socre[i] = 0;
@@ -295,7 +297,7 @@ void clear_variable() {
 	leg_num = 0;	//다리설정
 	start_bit = 0;	//시작비트
 	training_timer = 0;	//타이머0
-	target_sec = 0;	//목표초
+
 	move_dis = 0;	//이동거리
 	target_time = 0;	//목표시간
 	time_now = 0;	//보행시간
@@ -342,6 +344,7 @@ void clear_variable() {
 
 	for (i = 0; i < 16; i++) RxBuff[i] = 0;
 	for (i = 0; i < 30; i++) EV_Buff[i] = 0;
+	for (i = 0; i < 50; i++) BT1[i] = 0;
 	for (i = 0; i < 800; i++) {
 		gait_abnormal_socre[i] = 0;
 		gait_normal_socre[i] = 0;
@@ -555,18 +558,18 @@ void BT_transmit() {
 			move_distance_1000, move_distance_100, move_distance_10,move_distance_1 );
 
 
-
+/*
 	//시간설정
 	if (Type_sel == 2) {
-		if (time_now > target_sec)
+		if (time_now > target_time)
 			sprintf(BT1, "!e?");
 	}
 	//거리설정
-	else if (Type_sel) {
+	else if (Type_sel==1) {
 		if (move_dis > target_dis)
 			sprintf(BT1, "!e?");
 	}
-
+*/
 	BT_Put_String(BT1);
 }
 
@@ -887,7 +890,6 @@ interrupt void sciaRxFifoIsr(void) {
 	else if (RxBuff[0] == '!' && RxBuff[1] == 'T' && RxBuff[5] == '?') {
 		target_time = atof(&RxBuff[2]);
 		Train_target =(int)target_time % 10;
-		Train_target++;
 		target_time = (int)target_time / 10;
 		target_time = (int)target_time * 60;
 
@@ -941,7 +943,7 @@ void MetabolizeRehabilitationRobot() {
 		}
 	}
 	// MATLAB 2 -> 100Hz Bluetooth 40 -> 5Hz
-	if (TimerCount == 20) {
+	if (TimerCount == 40) {
 		TimerCount = 0;
 		if (start_bit && (!end_bit))
 			BT_transmit();
@@ -1032,16 +1034,10 @@ void TrainAbnormalPerson() {
 			Abnormal_assist_gain = 1;
 		if (!foot_shift_bit)
 			Abnormal_assist_gain = 1 + ratio_gain;
-		Motor_Pwm = (1 + target_gain)*Abnormal_assist_gain * (CPM_assist - 0.5985) + 0.5985;
+		Motor_Pwm = (1 + 0.1*target_gain)*Abnormal_assist_gain * (CPM_assist - 0.5985) + 0.5985;
 
 		break;
 	case 2:
-		Start_breaking();
-		Reword_inflection_point();
-		Motor_Pwm = EV_mva * 40 * smooth_rise;
-
-		break;
-	case 3:
 		Start_breaking();
 		CPM_assist = a0 + a1 * cos(Encoder_deg_new * w)
 				+ b1 * sin(Encoder_deg_new * w)
@@ -1094,6 +1090,14 @@ void TrainAbnormalPerson() {
 				+ 0.5985;
 
 		break;
+
+	case 3:
+		Start_breaking();
+		Reword_inflection_point();
+		Motor_Pwm = EV_mva * 40 * smooth_rise;
+
+		break;
+
 	}
 
 }
@@ -1158,6 +1162,8 @@ int Type_Check_fun() {
 			}
 			else {
 				break_time();
+				//break_duty=0;
+				//Motor_Pwm=0;
 				return 1;
 			}
 		}
@@ -1175,6 +1181,8 @@ void break_time(){
 	}
 	if (break_time_now>=60){
 		time_now=0;
+		break_time_now=0;
+		break_timer=0;
 		++Train_num;
 	}
 }
@@ -1309,8 +1317,11 @@ interrupt void cpu_timer0_isr(void) // cpu timer 현재 제어주파수 100Hz
 	if (IsPause())
 		goto RETURN;
 
-	if (Type_Check_fun())
+	if (Type_Check_fun()){
+		Robot_Initialize();
 		goto RETURN;
+	}
+
 	IncreaseTime();
 	TrainAbnormalPerson();
 	Gait_score_calculation();
